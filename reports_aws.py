@@ -25,7 +25,6 @@ import time
 import os
 import smtplib
 import html
-from reports_compliance import events_url_from_filters
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from email.message import EmailMessage
@@ -151,9 +150,6 @@ def es_post_search(query: dict) -> dict:
 
 # === DASHBOARD URL BUILDER - SAME STYLE AS GCP SCRIPT ===
 def build_dashboard_url(time_from, time_to, filters=None):
-    _ag = events_url_from_filters(time_from, time_to, filters, source="wazuh")
-    if _ag:
-        return _ag
     base = f"{DASHBOARD_BASE_URL}/app/discover#"
     filter_rison = "!()"
     if filters:
