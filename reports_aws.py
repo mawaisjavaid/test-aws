@@ -150,7 +150,12 @@ def es_post_search(query: dict) -> dict:
 
 # === DASHBOARD URL BUILDER - SAME STYLE AS GCP SCRIPT ===
 def build_dashboard_url(time_from, time_to, filters=None):
-    base = f"{DASHBOARD_BASE_URL}/app/discover#"
+    # Dashboard links are optional. If no absolute dashboard base URL is configured,
+    # return an empty string so email clients do not expose broken relative URLs.
+    dashboard_base = (DASHBOARD_BASE_URL or "").strip().rstrip("/")
+    if not dashboard_base.lower().startswith(("http://", "https://")):
+        return ""
+    base = f"{dashboard_base}/app/discover#"
     filter_rison = "!()"
     if filters:
         filter_items = []
@@ -604,6 +609,19 @@ def _section_detail(sec, key):
     return []
 
 
+def _linked_text(label, url, color, font_size="14px", font_weight="600"):
+    safe_label = html.escape(str(label))
+    if not url:
+        return f'<span style="color:{color};font-weight:{font_weight};font-size:{font_size};">{safe_label}</span>'
+    return f'<a href="{html.escape(url, quote=True)}" style="color:{color};text-decoration:none;font-weight:{font_weight};font-size:{font_size};">{safe_label}</a>'
+
+
+def _view_link(label, url, color):
+    if not url:
+        return ""
+    return f'<a href="{html.escape(url, quote=True)}" style="color:{color};text-decoration:none;font-size:12px;font-weight:500;">{html.escape(label)} →</a>'
+
+
 def build_section_rows(stats, colors, time_from, time_to):
     rows = ""
     order = ["cloudtrail", "guardduty", "inspector2", "waf", "iam_changes", "failed_api_calls", "root_activity", "destructive_activity"]
@@ -618,10 +636,11 @@ def build_section_rows(stats, colors, time_from, time_to):
         elif sec.get("methods"):
             section_url = build_dashboard_url(time_from, time_to, [{"type": "phrase", "field": "data.aws.eventName", "value": sec["methods"][0][0]}])
         count_color = colors["danger"] if key in ["iam_changes", "failed_api_calls", "root_activity", "destructive_activity"] and sec["count"] > 0 else colors["primary"]
+        title_html = _linked_text(title, section_url, colors["primary"])
         rows += f"""
         <tr style="background:{'#fafafa' if i % 2 == 0 else '#fff'};">
             <td style="padding:14px 16px;border-bottom:1px solid {colors['border']};font-size:14px;color:{colors['text']};font-weight:600;">{i}</td>
-            <td style="padding:14px 16px;border-bottom:1px solid {colors['border']};"><a href="{section_url}" style="color:{colors['primary']};text-decoration:none;font-weight:600;font-size:14px;">{html.escape(title)}</a></td>
+            <td style="padding:14px 16px;border-bottom:1px solid {colors['border']};">{title_html}</td>
             <td style="padding:14px 16px;border-bottom:1px solid {colors['border']};text-align:right;"><span style="background:{count_color};color:#fff;padding:5px 10px;border-radius:4px;font-weight:700;font-size:13px;display:inline-block;min-width:40px;text-align:center;">{sec['count']}</span></td>
             <td style="padding:14px 16px;border-bottom:1px solid {colors['border']};font-size:12px;color:{colors['text']};line-height:1.5;">{html.escape(detail_text)}</td>
         </tr>"""
@@ -632,10 +651,11 @@ def build_simple_table_rows(items, colors, field, time_from, time_to):
     rows = ""
     for i, (name, count) in enumerate(items[:10], 1):
         url = build_dashboard_url(time_from, time_to, [{"type": "phrase", "field": field, "value": name}]) if name != "UNKNOWN" else build_dashboard_url(time_from, time_to)
+        name_html = _linked_text(name, url, colors["primary"], font_size="13px", font_weight="500")
         rows += f"""
         <tr style="background:{'#fafafa' if i % 2 == 0 else '#fff'};">
             <td style="padding:12px 16px;border-bottom:1px solid {colors['border']};font-weight:600;color:{colors['text']};">{i}</td>
-            <td style="padding:12px 16px;border-bottom:1px solid {colors['border']};"><a href="{url}" style="color:{colors['primary']};text-decoration:none;font-weight:500;">{html.escape(str(name))}</a></td>
+            <td style="padding:12px 16px;border-bottom:1px solid {colors['border']};">{name_html}</td>
             <td style="padding:12px 16px;border-bottom:1px solid {colors['border']};text-align:right;font-weight:700;color:{colors['text']};">{count}</td>
         </tr>"""
     return rows
@@ -669,6 +689,11 @@ def build_html_report(report_type, time_from, time_to, stats, ai_analysis):
     cloudtrail_url = build_dashboard_url(time_from, time_to, [{"type": "phrase", "field": "data.aws.source", "value": "cloudtrail"}])
     guardduty_url = build_dashboard_url(time_from, time_to, [{"type": "phrase", "field": "data.aws.source", "value": "guardduty"}])
     inspector_url = build_dashboard_url(time_from, time_to, [{"type": "phrase", "field": "data.aws.source", "value": "inspector2"}])
+
+    total_view_html = _view_link("View All", all_events_url, colors["primary"])
+    cloudtrail_view_html = _view_link("View Details", cloudtrail_url, colors["info"])
+    guardduty_view_html = _view_link("View Details", guardduty_url, colors["warning"])
+    inspector_view_html = _view_link("View Details", inspector_url, colors["danger"])
 
     total_comparison_html = format_comparison_html('total_events', stats, colors)
     cloudtrail_comparison_html = format_comparison_html('cloudtrail', stats, colors)
@@ -709,10 +734,10 @@ def build_html_report(report_type, time_from, time_to, stats, ai_analysis):
 
                 <!-- Quick Stats -->
                 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:32px;"><tr><td style="padding:0;"><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff;border:1px solid {colors['border']};border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['primary']};margin-bottom:4px;">{stats['total_events']}</div><div style="color:{colors['text_light']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Total AWS Events</div><div style="min-height:20px;margin-bottom:4px;">{total_comparison_html}</div><a href="{all_events_url}" style="color:{colors['primary']};text-decoration:none;font-size:12px;font-weight:500;">View All →</a></td></tr></table></td>
-                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff;border:1px solid {colors['border']};border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['info']};margin-bottom:4px;">{stats['sections']['cloudtrail']['count']}</div><div style="color:{colors['info']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">CloudTrail</div><div style="color:{colors['text_light']};font-size:11px;margin-bottom:4px;">AWS audit and API activity</div><div style="min-height:20px;margin-bottom:4px;">{cloudtrail_comparison_html}</div><a href="{cloudtrail_url}" style="color:{colors['info']};text-decoration:none;font-size:12px;font-weight:500;">View Details →</a></td></tr></table></td>
-                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['warning']};margin-bottom:4px;">{stats['sections']['guardduty']['count']}</div><div style="color:{colors['warning']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">GuardDuty</div><div style="color:{colors['text_light']};font-size:11px;margin-bottom:4px;">Threat detection findings</div><div style="min-height:20px;margin-bottom:4px;">{guardduty_comparison_html}</div><a href="{guardduty_url}" style="color:{colors['warning']};text-decoration:none;font-size:12px;font-weight:500;">View Details →</a></td></tr></table></td>
-                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['danger']};margin-bottom:4px;">{stats['sections']['inspector2']['count']}</div><div style="color:{colors['danger']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Inspector2</div><div style="color:{colors['text_light']};font-size:11px;margin-bottom:4px;">Vulnerability findings</div><div style="min-height:20px;margin-bottom:4px;">{inspector_comparison_html}</div><a href="{inspector_url}" style="color:{colors['danger']};text-decoration:none;font-size:12px;font-weight:500;">View Details →</a></td></tr></table></td>
+                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff;border:1px solid {colors['border']};border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['primary']};margin-bottom:4px;">{stats['total_events']}</div><div style="color:{colors['text_light']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Total AWS Events</div><div style="min-height:20px;margin-bottom:4px;">{total_comparison_html}</div>{total_view_html}</td></tr></table></td>
+                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff;border:1px solid {colors['border']};border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['info']};margin-bottom:4px;">{stats['sections']['cloudtrail']['count']}</div><div style="color:{colors['info']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">CloudTrail</div><div style="color:{colors['text_light']};font-size:11px;margin-bottom:4px;">AWS audit and API activity</div><div style="min-height:20px;margin-bottom:4px;">{cloudtrail_comparison_html}</div>{cloudtrail_view_html}</td></tr></table></td>
+                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['warning']};margin-bottom:4px;">{stats['sections']['guardduty']['count']}</div><div style="color:{colors['warning']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">GuardDuty</div><div style="color:{colors['text_light']};font-size:11px;margin-bottom:4px;">Threat detection findings</div><div style="min-height:20px;margin-bottom:4px;">{guardduty_comparison_html}</div>{guardduty_view_html}</td></tr></table></td>
+                    <td width="25%" style="padding:8px;vertical-align:top;"><table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;height:160px;table-layout:fixed;"><tr><td style="padding:20px;text-align:center;height:160px;vertical-align:middle;"><div style="font-size:32px;font-weight:700;color:{colors['danger']};margin-bottom:4px;">{stats['sections']['inspector2']['count']}</div><div style="color:{colors['danger']};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Inspector2</div><div style="color:{colors['text_light']};font-size:11px;margin-bottom:4px;">Vulnerability findings</div><div style="min-height:20px;margin-bottom:4px;">{inspector_comparison_html}</div>{inspector_view_html}</td></tr></table></td>
                 </tr></table></td></tr></table>
 
                 {ai_section}
